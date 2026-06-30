@@ -1,0 +1,71 @@
+# ── UNITY ────────────────────────────────────────────────────────────────────
+# Regenerado por Unity al abrir el proyecto; puede ser varios GB
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+/[Uu]serSettings/
+
+# Builds
+/[Bb]uild/
+/[Bb]uilds/
+/[Aa]ssets/AssetStoreTools*
+
+# Crashlytics / CI
+sysinfo.txt
+crashlytics-build.properties
+
+# ── VISUAL STUDIO / RIDER ────────────────────────────────────────────────────
+# Archivos de proyecto generados automáticamente por Unity
+*.csproj
+*.sln
+*.unityproj
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# IDEs
+.vs/
+.idea/
+*.DS_Store
+
+# ── SISTEMA OPERATIVO ────────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ── DOTNET ───────────────────────────────────────────────────────────────────
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+# ── UNITY ADDRESSABLES / CACHE ───────────────────────────────────────────────
+/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/**/[Aa]ddressables[Cc]ache/
+
+# ── MANTENER ─────────────────────────────────────────────────────────────────
+# Los .meta de Assets deben rastrearse — Unity los usa para referencias por GUID
+!Assets/**/*.meta
