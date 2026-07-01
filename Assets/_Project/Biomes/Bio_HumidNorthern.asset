@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2f91bb987073df64492ca5e62e25352b, type: 3}
+  m_Name: Bio_HumidNorthern
+  m_EditorClassIdentifier: Assembly-CSharp::BiomeData
+  biomeName: Bio_HumidNorthern
+  color: {r: 0.16470589, g: 0.47843137, b: 0.16470589, a: 1}
+  minTemperature: 0.58
+  maxTemperature: 1
+  minHumidity: 0.4
+  maxHumidity: 1
+  minElevation: 0
+  maxElevation: 0.55

@@ -1,42 +1,60 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// CameraController va en la Main Camera — no en el jugador.
-// Orbita alrededor del jugador usando el input de Look (mouse delta / stick derecho).
+// Cámara de tercera persona estilo Valheim:
+//   · RMB mantenido → orbita la cámara con el mouse (cursor oculto/locked)
+//   · Sin RMB → cursor libre, la cámara sigue al jugador sin rotar
+//   · Scroll wheel → zoom suave entre minDistance y maxDistance
+//   · SphereCast pivot → cámara → acorta la distancia ante el primer obstáculo
 //
-// Se ejecuta en LateUpdate para garantizar que el jugador ya actualizó
+// Ejecuta en LateUpdate para garantizar que el jugador ya actualizó
 // su posición en este frame antes de que la cámara recalcule la suya.
-// Análogo a un useLayoutEffect en React: se ejecuta después del "render" (Update).
 public class CameraController : MonoBehaviour
 {
     [Header("Target")]
     [SerializeField] private Transform target;
-    [SerializeField] private float followDistance = 6f;
     // Cuánto sube el punto de mira respecto a los pies del jugador.
     [SerializeField] private float heightOffset = 1.8f;
 
-    [Header("Look")]
-    [SerializeField] private float mouseSensitivity = 0.15f;
-    [SerializeField] private float gamepadSensitivity = 120f; // grados/segundo
-    [SerializeField] private float minPitch = -30f;
-    [SerializeField] private float maxPitch =  70f;
+    [Header("Orbit")]
+    [SerializeField] private float mouseSensitivity = 0.20f;
+    [SerializeField] private float minPitch = -20f;
+    [SerializeField] private float maxPitch =  75f;
 
-    private InputSystem_Actions _input;
+    [Header("Zoom")]
+    [SerializeField] private float distance    = 6f;
+    [SerializeField] private float minDistance = 1.5f;
+    [SerializeField] private float maxDistance = 14f;
+    // Unidades Unity que se acercan/alejan por notch de scroll.
+    [SerializeField] private float zoomStep    = 1.5f;
+    // Velocidad del suavizado exponencial hacia el zoom objetivo.
+    [SerializeField] private float zoomSmooth  = 8f;
+
+    [Header("Collision")]
+    // Radio de la esfera usada para detectar obstáculos entre pivot y cámara.
+    [SerializeField] private float     collisionRadius = 0.25f;
+    // Excluir la capa del jugador (Player) para que el SphereCast no lo detecte.
+    [SerializeField] private LayerMask collisionMask   = ~0;
+
     private float _yaw;
-    private float _pitch = 20f; // ángulo inicial: ligeramente desde arriba
+    private float _pitch       = 20f;
+    private float _targetDist;
+    private float _currentDist;
 
-    private void Awake() => _input = new InputSystem_Actions();
+    private void Awake()
+    {
+        _targetDist  = distance;
+        _currentDist = distance;
+    }
 
     private void OnEnable()
     {
-        _input.Player.Enable();
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible   = false;
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible   = true;
     }
 
     private void OnDisable()
     {
-        _input.Player.Disable();
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible   = true;
     }
@@ -44,61 +62,70 @@ public class CameraController : MonoBehaviour
     private void LateUpdate()
     {
         if (target == null) return;
-
-        HandleEscapeKey();
-        OrbitCamera();
+        HandleOrbit();
+        HandleZoom();
+        PositionCamera();
     }
 
-    // ------------------------------------------------------------------
-    // ÓRBITA DE CÁMARA
-    // ------------------------------------------------------------------
-    // La posición de la cámara se calcula colocando un punto a "followDistance"
-    // unidades detrás del pivot y rotando esa distancia con pitch + yaw.
-    //
-    // Quaternion.Euler(pitch, yaw, 0) * Vector3(0, 0, -distance):
-    //   - yaw rota horizontalmente (eje Y): cuánto giró el mouse izq/der
-    //   - pitch rota verticalmente (eje X): cuánto giró el mouse arriba/abajo
-    //   - Z negativo porque "detrás" del jugador es -Z en espacio local de la rotación
-    //
-    // Es equivalente a las coordenadas esféricas:
-    //   x = r * cos(pitch) * sin(yaw)
-    //   y = r * sin(pitch)
-    //   z = r * cos(pitch) * cos(yaw)
-    // ------------------------------------------------------------------
-    private void OrbitCamera()
+    // ──────────────────────────────────────────────────────────────────────
+    // ÓRBITA
+    // ──────────────────────────────────────────────────────────────────────
+    private void HandleOrbit()
     {
-        Vector2 lookDelta = _input.Player.Look.ReadValue<Vector2>();
+        if (Mouse.current == null) return;
 
-        // El mouse devuelve delta en píxeles — multiplicar por sensitivity da grados.
-        // El stick devuelve [-1,1] continuo — multiplicar por gamepadSensitivity * dt da grados/frame.
-        // Detectamos si es mouse (magnitud alta en un frame) o stick (magnitud baja, continuo).
-        bool isGamepad = lookDelta.magnitude < 2f;
-        float scale    = isGamepad ? gamepadSensitivity * Time.deltaTime : mouseSensitivity;
+        bool rmb      = Mouse.current.rightButton.isPressed;
+        bool justDown = Mouse.current.rightButton.wasPressedThisFrame;
 
-        _yaw   += lookDelta.x * scale;
-        _pitch -= lookDelta.y * scale;
+        // El cursor se oculta y bloquea solo mientras se orbita.
+        Cursor.lockState = rmb ? CursorLockMode.Locked : CursorLockMode.None;
+        Cursor.visible   = !rmb;
+
+        // Primer frame de RMB: descartamos el delta acumulado antes del lockeo
+        // para evitar el salto brusco de cámara al apretar el botón.
+        if (!rmb || justDown) return;
+
+        Vector2 delta = Mouse.current.delta.ReadValue();
+        _yaw   += delta.x * mouseSensitivity;
+        _pitch -= delta.y * mouseSensitivity;
         _pitch  = Mathf.Clamp(_pitch, minPitch, maxPitch);
-
-        Vector3    pivot    = target.position + Vector3.up * heightOffset;
-        Quaternion rotation = Quaternion.Euler(_pitch, _yaw, 0f);
-
-        transform.position = pivot + rotation * new Vector3(0f, 0f, -followDistance);
-        transform.LookAt(pivot);
     }
 
-    // Escape desbloquea el cursor para poder hacer clic en el Editor.
-    // Clic izquierdo lo vuelve a bloquear.
-    private void HandleEscapeKey()
+    // ──────────────────────────────────────────────────────────────────────
+    // ZOOM
+    // ──────────────────────────────────────────────────────────────────────
+    // Normalizar por notch (independiente de la velocidad del scroll)
+    // da una respuesta predecible en cualquier mouse.
+    private void HandleZoom()
     {
-        if (Input.GetKeyDown(KeyCode.Escape))
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible   = true;
-        }
-        else if (Input.GetMouseButtonDown(0) && Cursor.lockState == CursorLockMode.None)
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible   = false;
-        }
+        if (Mouse.current == null) return;
+
+        float scroll = Mouse.current.scroll.ReadValue().y;
+        if      (scroll >  0.01f) _targetDist -= zoomStep;
+        else if (scroll < -0.01f) _targetDist += zoomStep;
+
+        _targetDist  = Mathf.Clamp(_targetDist, minDistance, maxDistance);
+        _currentDist = Mathf.Lerp(_currentDist, _targetDist, Time.deltaTime * zoomSmooth);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // POSICIÓN Y ORIENTACIÓN DE LA CÁMARA
+    // ──────────────────────────────────────────────────────────────────────
+    // SphereCast desde el pivot hacia la dirección de la cámara.
+    // Si hay un obstáculo, acortamos la distancia para que la cámara
+    // no clippe con paredes ni terreno.
+    private void PositionCamera()
+    {
+        Vector3    pivot = target.position + Vector3.up * heightOffset;
+        Quaternion rot   = Quaternion.Euler(_pitch, _yaw, 0f);
+        Vector3    dir   = rot * Vector3.back;   // dirección pivot → cámara
+
+        float dist = _currentDist;
+        if (Physics.SphereCast(pivot, collisionRadius, dir, out RaycastHit hit,
+                               dist, collisionMask, QueryTriggerInteraction.Ignore))
+            dist = Mathf.Max(hit.distance - collisionRadius, 0.1f);
+
+        transform.position = pivot + dir * dist;
+        transform.LookAt(pivot);
     }
 }

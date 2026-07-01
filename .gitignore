@@ -69,3 +69,6 @@ bld/
 # ── MANTENER ─────────────────────────────────────────────────────────────────
 # Los .meta de Assets deben rastrearse — Unity los usa para referencias por GUID
 !Assets/**/*.meta
+
+# -- SOUNDS -------------------------------------
+Assets/_Project/Sounds/

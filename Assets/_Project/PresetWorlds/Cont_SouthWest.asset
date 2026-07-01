@@ -1,0 +1,38 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bab1ef89fedf9654e9fa328e059541f8, type: 3}
+  m_Name: Cont_SouthWest
+  m_EditorClassIdentifier: Assembly-CSharp::TerrainPreset
+  noiseScale: 0.001
+  maxHeight: 300
+  octaves: 4
+  persistence: 0.303
+  lacunarity: 2
+  offset: {x: 5230, y: 3120}
+  elevationExponent: 2.5
+  ridgeThreshold: 0.5
+  ridgeStrength: 0.75
+  baseTemperature: 0.5
+  latitudeScale: 0.0005
+  altitudeCooling: 0.55
+  baseHumidity: 0.55
+  climateNoiseScale: 0.002
+  climateNoiseStrength: 0.35
+  tempNoiseOffset: {x: 0, y: 0}
+  humidityNoiseOffset: {x: 500, y: 300}
+  blendRadius: 0.4
+  biomes:
+  - {fileID: 11400000, guid: f1c1fc762f6a2a942807ff929491df6d, type: 2}
+  - {fileID: 11400000, guid: 74b4007c8531f764c8e456a8cb4698ea, type: 2}
+  - {fileID: 11400000, guid: fe200cf7081f6e44aa67a446a09adf1d, type: 2}
+  - {fileID: 11400000, guid: 5257f6ad94244b243aed0824097bdf44, type: 2}
+  - {fileID: 11400000, guid: 55dabb7fab8fd564a86bdd95ea704d6a, type: 2}

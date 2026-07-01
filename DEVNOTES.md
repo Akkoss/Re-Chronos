@@ -4,8 +4,10 @@
 
 | Script | Rol |
 |---|---|
+| `TerrainPreset.cs` | ScriptableObject: todos los parámetros de noise, clima y lista de BiomeData |
+| `BiomeData.cs` | ScriptableObject: nombre, color y rangos de temperatura/humedad/elevación de un bioma |
 | `ProceduralTerrain.cs` | World manager: ciclo de vida de chunks, LOD, tracking del viewer |
-| `TerrainChunk.cs` | Un chunk: malla + ruido + vertex colors + MeshCollider + soporte LOD |
+| `TerrainChunk.cs` | Un chunk: malla + simulación climática + vertex colors por bioma + MeshCollider + LOD |
 | `VegetationSpawner.cs` | Genera árboles y pasto en cada chunk con seeds determinísticos |
 | `PlayerController.cs` | CharacterController + Input System, movimiento, salto, gravedad |
 | `PlayerVisual.cs` | Modelo placeholder (primitivas) + animación procedural |
@@ -15,6 +17,7 @@
 | `WaterManager.cs` | Crea plano de agua subdivido a waterLevel Y, sigue al viewer en XZ con snap de 1u |
 | `TerrainVertexColor.shader` | Shader URP custom: lee Mesh.colors, Lambert difuso |
 | `Water.shader` | Shader URP transparente: suma de senos (vertex + fragment), Fresnel, SampleSH ambient |
+| `DebugHUD.cs` | Panel IMGUI togglable con F3: posición, chunk, elevación, temperatura, humedad, bioma, FPS |
 
 ## Chunk Pool
 
@@ -51,15 +54,82 @@ El array `lodLevels` en `ProceduralTerrain` debe estar ordenado por `distanceThr
 - `TerrainChunk.UpdateLOD()` reconstruye la malla solo si el step cambió (evita rebuilds innecesarios)
 - Los `Mesh` obsoletos se destruyen explícitamente para evitar memory leaks
 
-## Terrain
+## Biomas y clima
+
+El sistema reemplaza el gradiente de altura fijo por una **simulación climática geográfica** por vértice. Temperatura y humedad determinan el bioma; la altitud actúa como modificador.
+
+### Flujo de cálculo por vértice
+
+```
+normalizedElevation = height / maxHeight                           [0..1]
+temperature         = baseTemp + worldZ × latitudeScale            ← gradiente N-S
+                    - normalizedElev × altitudeCooling             ← enfriamiento por altura
+                    + PerlinNoise(worldX, worldZ, tempOffset) × strength
+humidity            = baseHumidity
+                    + PerlinNoise(worldX, worldZ, humOffset) × strength
+color               = mezcla ponderada de biomas por distancia en espacio (elev, temp, hum)
+```
+
+### Parámetros clave del TerrainPreset
 
 | Param | Default | Efecto |
 |---|---|---|
-| `noiseScale` | `0.03` | Frecuencia del ruido (bajo = colinas grandes) |
-| `maxHeight` | `30` | Altura máxima en unidades Unity |
-| `octaves` | `4` | Capas de ruido (más = más detalle) |
-| `persistence` | `0.5` | Peso de cada octava (0.5 = mitad cada vez) |
-| `lacunarity` | `2.0` | Multiplicador de frecuencia por octava |
+| `noiseScale` | `0.03` | Frecuencia del ruido de elevación |
+| `maxHeight` | `30` | Altura máxima en unidades |
+| `octaves` | `4` | Capas del ruido fbm |
+| `persistence` | `0.5` | Peso de cada octava |
+| `lacunarity` | `2.0` | Multiplicador de frecuencia |
+| `baseTemperature` | `0.50` | Temperatura en Z=0 (zona templada, estilo Buenos Aires) |
+| `latitudeScale` | `0.002` | Cambio de temp/unidad en Z. Con 0.002: ±500u cubre 0→1 |
+| `altitudeCooling` | `0.55` | Cuánto resta la cima: temp_cima = temp_base − 0.55 |
+| `baseHumidity` | `0.50` | Humedad base antes del ruido climático |
+| `climateNoiseScale` | `0.008` | Escala del Perlin de clima (bajo = manchas grandes) |
+| `climateNoiseStrength` | `0.20` | Amplitud del ruido climático (±0.20) |
+| `blendRadius` | `0.12` | Radio de mezcla en espacio climático. Más alto = bordes más suaves |
+| `elevationExponent` | `2.5` | Pow aplicado al ruido normalizado [0,1]. Aplana cuencas; preserva montañas. 1=lineal |
+| `ridgeThreshold` | `0.50` | Umbral desde el cual activa la cresta. Con exp=2.5 corresponde al ~20% superior |
+| `ridgeStrength` | `0.75` | Intensidad del efecto cresta. 0=sin efecto, 1=V pura. 0.7–0.8 = cordillera con laderas empinadas |
+
+### Rangos sugeridos para los 5 biomas
+
+> Todos los valores son normalizados (0.0–1.0). `blendRadius = 0.12` crea transiciones suaves en los bordes.
+
+| Bioma | Temp min | Temp max | Hum min | Hum max | Elev min | Elev max | Color hex |
+|---|---|---|---|---|---|---|---|
+| **Alta Montaña** | 0.00 | 1.00 | 0.00 | 1.00 | 0.62 | 1.00 | `#9EA8A4` gris-nieve |
+| **Sur Frío / Tundra** | 0.00 | 0.38 | 0.00 | 1.00 | 0.00 | 0.65 | `#6E8068` gris-verde |
+| **Llanura Templada** | 0.30 | 0.68 | 0.25 | 0.75 | 0.00 | 0.55 | `#6B8F3E` oliva |
+| **Norte Seco / Estepa** | 0.55 | 1.00 | 0.00 | 0.45 | 0.00 | 0.65 | `#C4A84A` tierra seca |
+| **Norte Húmedo / Selva** | 0.58 | 1.00 | 0.40 | 1.00 | 0.00 | 0.55 | `#2A7A2A` verde oscuro |
+
+**Lógica de las franjas verticales:**
+- **Z positivo** → Norte → temperatura alta → Norte Seco o Norte Húmedo según humedad del Perlin
+- **Z = 0** → Zona templada → Llanura Templada en elevaciones bajas, Alta Montaña en cimas
+- **Z negativo** → Sur → temperatura baja → Sur Frío / Tundra
+- **Cualquier latitud a gran altura** → altitudeCooling reduce la temp → Alta Montaña (elev ≥ 0.62)
+
+### Creación de assets en Unity
+
+1. Clic derecho en Project → **Create → Re-Chronos → Terrain Preset** → configurar parámetros y asignar biomas
+2. Para cada bioma: **Create → Re-Chronos → Biome Data** → poner nombre, color y rangos
+3. Arrastrar los BiomeData al array `Biomes` del TerrainPreset (orden no importa)
+4. Arrastrar el TerrainPreset al campo **Preset** del componente `Procedural Terrain`
+
+### Notas técnicas
+
+- `SampleHeight`: FBM → normalizar [0,1] → `Mathf.Pow(n, elevationExponent)` → si > ridgeThreshold, tent function `1 − |t·2 − 1|` mezclada con `ridgeStrength` → escalar a `maxHeight`
+- `TerrainSettings` (struct) eliminado — `TerrainPreset` (ScriptableObject) lo reemplaza en toda la cadena
+- `VegetationSpawner.Spawn()` ahora recibe `TerrainPreset` directamente
+- `TerrainChunk.SampleHeight()` sigue siendo `public static` para que el spawner acceda
+- `blendRadius` precomputado como `invBlend = 1 / blendRadius` antes del loop de vértices (evita división por vértice)
+- La fallback de bioma (cuando ningún bioma cubre el punto) usa el bioma de menor distancia centroide
+
+## Terrain
+
+Los parámetros de noise y clima están en el **TerrainPreset** ScriptableObject. Los parámetros de chunk siguen en `ProceduralTerrain`:
+
+| Param | Default | Efecto |
+|---|---|---|
 | `chunkSize` | `50` | Vértices por lado de chunk |
 | `viewDistance` | `3` | Radio de chunks visibles (7×7 = 49 chunks) |
 
@@ -185,8 +255,25 @@ El array `lodLevels` en `ProceduralTerrain` debe estar ordenado por `distanceThr
 
 ## Camera
 
-- followDistance: 6 · heightOffset: 1.8 · mouseSensitivity: 0.15
-- Pitch: [-30°, 70°] · LateUpdate (siempre después del jugador)
+Estilo **Valheim**: cursor libre en reposo; RMB orbita la cámara; scroll hace zoom; SphereCast evita clipping.
+
+| Param | Default | Efecto |
+|---|---|---|
+| `heightOffset` | `1.8` | Altura del pivot de cámara respecto a los pies del jugador |
+| `mouseSensitivity` | `0.20` | Grados por píxel de delta de mouse |
+| `minPitch / maxPitch` | `-20° / 75°` | Límites verticales de órbita |
+| `distance` | `6` | Distancia inicial de la cámara al pivot |
+| `minDistance / maxDistance` | `1.5 / 14` | Rango de zoom |
+| `zoomStep` | `1.5` | Unidades de zoom por notch de scroll |
+| `zoomSmooth` | `8` | Velocidad del suavizado exponencial al zoom objetivo |
+| `collisionRadius` | `0.25` | Radio del SphereCast de colisión cámara |
+| `collisionMask` | `~0` | Capas detectadas. Excluir la capa del jugador (Player) |
+
+**Flujo:**
+- RMB mantenido → cursor oculto/locked, mouse delta acumula yaw/pitch
+- El primer frame de RMB descarta el delta (evita salto brusco al bloquear el cursor)
+- Sin RMB → cursor libre, cámara sigue al jugador sin rotar
+- `SphereCast(pivot → dir)` → acorta distancia si hay obstáculo entre pivot y cámara
 
 ## Input
 
@@ -207,11 +294,15 @@ El array `lodLevels` en `ProceduralTerrain` debe estar ordenado por `distanceThr
 - [ ] `InputSystem_Actions.inputactions` → Inspector → **Generate C# Class** → Apply
 - [ ] `Assets/_Project/TerrainMaterial.mat` → verificar shader `Custom/TerrainVertexColor`
 
+**Biomas (hacer primero)**
+- [ ] Para cada bioma: clic derecho en Project → **Create → Re-Chronos → Biome Data** → configurar nombre, color y rangos de Temperatura/Humedad/Elevación
+- [ ] Clic derecho → **Create → Re-Chronos → Terrain Preset** → configurar noise, clima y arrastrar los BiomeData al array **Biomes**
+
 **Terreno**
 - [ ] Terrain GO → Transform en `(0, 0, 0)` con Scale `(1, 1, 1)` y Rotation `(0, 0, 0)`
 - [ ] Terrain GO → `Procedural Terrain` → **Terrain Material** → arrastrar `TerrainMaterial`
+- [ ] Terrain GO → **Preset** → arrastrar el `TerrainPreset` creado
 - [ ] Terrain GO → **Viewer** → arrastrar Transform del Player
-- [ ] Terrain GO → **Height Gradient** → configurar stops de color
 - [ ] Terrain GO → quitar `Mesh Filter` y `Mesh Renderer` si quedaron del sistema anterior
 
 **Vegetación**
@@ -281,6 +372,36 @@ El GO padre (`WorldGenerator`) tenía rotación no-cero; los chunks la heredaban
 ### noiseScale demasiado alto crea tiling
 Si `noiseScale × chunkSize` da un entero (ej. `0.3 × 50 = 15`), el Perlin noise repite exactamente y todos los chunks se ven iguales.
 **Fix:** Usar `noiseScale` que no produzca múltiplo entero con `chunkSize`. Default recomendado: `0.03`.
+
+## Debug HUD
+
+Panel IMGUI togglable con **F3**. Agregar el componente `DebugHUD` a cualquier GO de la escena (ej. un vacío "DebugManager"). No requiere Canvas.
+
+| Param | Default | Efecto |
+|---|---|---|
+| `player` | — | Transform del jugador (fuente de posición y coord. de clima) |
+| `preset` | — | TerrainPreset activo (para llamar a `SampleClimate`) |
+| `chunkSize` | `50` | Tamaño de chunk para calcular las coordenadas de chunk |
+| `refreshEveryFrames` | `8` | Intervalo de refresco de datos climáticos (~7/seg a 60fps) |
+
+**Contenido del panel:**
+
+| Fila | Descripción |
+|---|---|
+| Header + FPS | Título y FPS (verde ≥55 · amarillo ≥28 · rojo <28) |
+| X / Y / Z | Posición mundial en unidades Unity |
+| CHUNK | Coordenadas de chunk `(cx, cz)` |
+| ELEV | Altura muestreada en el punto y porcentaje del maxHeight |
+| TEMP | Barra de color (azul→verde→naranja) + valor 0..1 |
+| HUM | Barra de color (tierra→azul) + valor 0..1 |
+| BIOMA | Nombre del bioma dominante en esa posición |
+
+**Notas técnicas:**
+- Los datos climáticos usan `TerrainChunk.SampleClimate(roundX, roundZ, preset)` — mismo algoritmo que la generación del terreno
+- `SampleClimate` llama internamente a `SampleHeight` → `ComputeTemperature` → `ComputeHumidity` → bioma más cercano por distancia en espacio climático
+- El struct `ClimateData` (definido en `TerrainChunk.cs`) expone: `Elevation`, `NormalizedElev`, `Temperature`, `Humidity`, `DominantBiome`
+- Los estilos IMGUI se inicializan lazy la primera vez que `_visible` es true (evita allocs en OnGUI cada frame)
+- `Derived(style, color)` crea un `GUIStyle` inline para colorear FPS y bioma sin definir un estilo extra
 
 ## Próximos pasos
 

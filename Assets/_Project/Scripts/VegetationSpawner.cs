@@ -30,7 +30,7 @@ public static class VegetationSpawner
 {
     public static GameObject Spawn(Vector2Int coord, int chunkSize,
                                    Transform chunkTransform,
-                                   TerrainSettings terrain,
+                                   TerrainPreset preset,
                                    VegetationSettings veg,
                                    GrassSettings grass = null)
     {
@@ -41,8 +41,8 @@ public static class VegetationSpawner
         var root = new GameObject("Vegetation");
         root.transform.SetParent(chunkTransform, false);
 
-        if (hasVeg)   SpawnTrees(coord, chunkSize, terrain, veg,   root.transform);
-        if (hasGrass) SpawnGrass(coord, chunkSize, terrain, grass, root.transform);
+        if (hasVeg)   SpawnTrees(coord, chunkSize, preset, veg,   root.transform);
+        if (hasGrass) SpawnGrass(coord, chunkSize, preset, grass, root.transform);
 
         return root;
     }
@@ -52,13 +52,13 @@ public static class VegetationSpawner
     // ──────────────────────────────────────────────────────────────────────
 
     private static void SpawnTrees(Vector2Int coord, int chunkSize,
-                                   TerrainSettings terrain, VegetationSettings veg,
+                                   TerrainPreset preset, VegetationSettings veg,
                                    Transform parent)
     {
         int seed = coord.x * 73856093 ^ coord.y * 19349663;
         var rng  = new System.Random(seed);
-        float minH = veg.minHeightFraction * terrain.maxHeight;
-        float maxH = veg.maxHeightFraction * terrain.maxHeight;
+        float minH = veg.minHeightFraction * preset.maxHeight;
+        float maxH = veg.maxHeightFraction * preset.maxHeight;
 
         var treeRoot = new GameObject("Trees");
         treeRoot.transform.SetParent(parent, false);
@@ -70,13 +70,13 @@ public static class VegetationSpawner
             int wx = Mathf.RoundToInt(coord.x * chunkSize + lx);
             int wz = Mathf.RoundToInt(coord.y * chunkSize + lz);
 
-            float h = TerrainChunk.SampleHeight(wx, wz, terrain);
+            float h = TerrainChunk.SampleHeight(wx, wz, preset);
             if (h < minH || h > maxH) continue;
 
-            float dhdx = TerrainChunk.SampleHeight(wx + 1, wz,     terrain)
-                       - TerrainChunk.SampleHeight(wx - 1, wz,     terrain);
-            float dhdz = TerrainChunk.SampleHeight(wx,     wz + 1, terrain)
-                       - TerrainChunk.SampleHeight(wx,     wz - 1, terrain);
+            float dhdx = TerrainChunk.SampleHeight(wx + 1, wz,     preset)
+                       - TerrainChunk.SampleHeight(wx - 1, wz,     preset);
+            float dhdz = TerrainChunk.SampleHeight(wx,     wz + 1, preset)
+                       - TerrainChunk.SampleHeight(wx,     wz - 1, preset);
             if (new Vector3(-dhdx, 2f, -dhdz).normalized.y < veg.minSlopeNormal) continue;
 
             float scale = (float)(rng.NextDouble() * 0.5 + 0.75);
@@ -94,14 +94,14 @@ public static class VegetationSpawner
     // ──────────────────────────────────────────────────────────────────────
 
     private static void SpawnGrass(Vector2Int coord, int chunkSize,
-                                   TerrainSettings terrain, GrassSettings grass,
+                                   TerrainPreset preset, GrassSettings grass,
                                    Transform parent)
     {
         // Seed distinto al de árboles para que las posiciones no se correlacionen.
         int seed = coord.x * 19349663 ^ coord.y * 83492791;
         var rng  = new System.Random(seed);
-        float minH = grass.minHeightFraction * terrain.maxHeight;
-        float maxH = grass.maxHeightFraction * terrain.maxHeight;
+        float minH = grass.minHeightFraction * preset.maxHeight;
+        float maxH = grass.maxHeightFraction * preset.maxHeight;
 
         Mesh bladeMesh = BuildBladeMesh(grass.bladeWidth, grass.bladeHeight);
         Material mat   = grass.material;
@@ -122,16 +122,16 @@ public static class VegetationSpawner
             int wx = Mathf.RoundToInt(coord.x * chunkSize + lx);
             int wz = Mathf.RoundToInt(coord.y * chunkSize + lz);
 
-            float h = TerrainChunk.SampleHeight(wx, wz, terrain);
+            float h = TerrainChunk.SampleHeight(wx, wz, preset);
             if (h < minH || h > maxH) continue;
 
-            float dhdx = TerrainChunk.SampleHeight(wx + 1, wz,     terrain)
-                       - TerrainChunk.SampleHeight(wx - 1, wz,     terrain);
-            float dhdz = TerrainChunk.SampleHeight(wx,     wz + 1, terrain)
-                       - TerrainChunk.SampleHeight(wx,     wz - 1, terrain);
+            float dhdx = TerrainChunk.SampleHeight(wx + 1, wz,     preset)
+                       - TerrainChunk.SampleHeight(wx - 1, wz,     preset);
+            float dhdz = TerrainChunk.SampleHeight(wx,     wz + 1, preset)
+                       - TerrainChunk.SampleHeight(wx,     wz - 1, preset);
             if (new Vector3(-dhdx, 2f, -dhdz).normalized.y < grass.minSlopeNormal) continue;
 
-            float scaleY = (float)(rng.NextDouble() * 0.5 + 0.75); // 0.75–1.25
+            float scaleY = (float)(rng.NextDouble() * 0.5 + 0.75);
             float yaw    = (float)(rng.NextDouble() * 360f);
             var pos = new Vector3(coord.x * chunkSize + lx, h, coord.y * chunkSize + lz);
 
