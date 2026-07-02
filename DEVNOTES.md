@@ -5,6 +5,8 @@
 | Script | Rol |
 |---|---|
 | `TerrainPreset.cs` | ScriptableObject: todos los parámetros de noise, clima y lista de BiomeData |
+| `MapManager.cs` | Mapa global togglable con M: cámara ortográfica cenital, RenderTexture, Canvas circular, marcador del jugador |
+| `WorldMapPreview.cs` *(Editor)* | EditorWindow: genera textura 2D del mapa sin Play mode, con modos BiomeColor / Elevation / Temperature / Humidity / WaterType |
 | `BiomeData.cs` | ScriptableObject: nombre, color y rangos de temperatura/humedad/elevación de un bioma |
 | `ProceduralTerrain.cs` | World manager: ciclo de vida de chunks, LOD, tracking del viewer |
 | `TerrainChunk.cs` | Un chunk: malla + simulación climática + vertex colors por bioma + MeshCollider + LOD |
@@ -54,6 +56,98 @@ El array `lodLevels` en `ProceduralTerrain` debe estar ordenado por `distanceThr
 - `TerrainChunk.UpdateLOD()` reconstruye la malla solo si el step cambió (evita rebuilds innecesarios)
 - Los `Mesh` obsoletos se destruyen explícitamente para evitar memory leaks
 
+## Agua (Mar, Ríos y Lagos)
+
+El sistema de agua es una capa que se ejecuta **antes** del cálculo climático y modifica la elevación y la humedad de cada vértice. Todo es función pura de coordenadas mundiales → sin estado cross-chunk → sin costuras en los bordes.
+
+### Pipeline de vértice (BuildMesh)
+
+```
+1. SampleHeight(worldX, worldZ)            → elev, normElev
+2. isOcean   = normElev < seaLevel
+3. RiverRidge(worldX, worldZ)              → ridgeVal [0..1]  (domain warping × 3 Perlin)
+   bankEdge  = riverThr − riverWidth × 2   ← zona de banco, 3× el canal
+   bankSpan  = riverWidth × 3
+   carveM    = SmoothStep(0,1, (ridgeVal−bankEdge)/bankSpan)    ← S-curve, sin pinches
+   riverM    = SmoothStep(0,1, (ridgeVal−riverThr)/riverWidth)  ← canal visual
+   isRiver   = riverM > 0
+   if carveM > 0: normElev = Max(seaLevel, Lerp(normElev, seaLevel, carveM×riverStrength))
+4. LakeMask(worldX, worldZ, normElev)      → lakeM [0..1]  (1 Perlin de baja freq)
+   if lakeM > 0: normElev = Lerp(normElev, seaLevel, lakeM)
+5. temperature = f(worldZ, normElev, altitudeCooling)
+6. waterBonus:
+   si isOcean/isRiver/isLake → bonus = waterHumidityBonus
+   si zona costera            → bonus = waterHumidityBonus × (1 − coastDist/coastalBand)
+   si aura fluvial            → bonus = waterHumidityBonus × 0.70 × auraNorm
+7. humidity = Clamp01(ComputeHumidity() + waterBonus)
+8. biomeColor = SampleBiomeColor(normElev, temp, hum)
+   si isOcean  → oceanFloorColor
+   si banco (carveM>0, riverM=0) → Lerp(biomeColor, riverBedColor, carveM×0.30)
+   si canal (riverM>0):
+       aboveSea? → Lerp(biomeColor, riverWaterColor, riverM×0.88)   ← agua de altura
+       al nivel  → Lerp(biomeColor, riverBedColor, riverM×0.88)      ← lecho seco
+   si lago (lakeM>0):
+       aboveSea? → Lerp(biomeColor, riverWaterColor, lakeM×0.85)
+       al nivel  → Lerp(biomeColor, oceanFloorColor, lakeM×0.85)
+```
+
+### Parámetros de TerrainPreset
+
+| Sección | Param | Default | Efecto |
+|---|---|---|---|
+| Mar | `seaLevel` | `0.15` | Cutoff normalizado. Con exp=2.5 da ~40% océano |
+| Mar | `oceanFloorColor` | azul oscuro | Color del fondo marino |
+| Mar | `coastalBand` | `0.08` | Banda de humedad costera sobre seaLevel |
+| Ríos | `riverNoiseScale` | `0.003` | Frecuencia. Bajo = ríos más largos |
+| Ríos | `riverNoiseOffset` | `(1000, 700)` | Seed de la red fluvial |
+| Ríos | `riverWidth` | `0.07` | Fracción del ridge que define el canal |
+| Ríos | `riverStrength` | `0.55` | Profundidad de talla en alta montaña |
+| Ríos | `riverBedColor` | grava oscura | Color del lecho del río (al nivel del mar) |
+| Ríos | `riverWaterColor` | azul-teal | Color del agua de ríos/lagos por encima del seaLevel (vertex color) |
+| Lagos | `lakeThreshold` | `0.28` | Umbral del ruido de cuenca; más alto = más lagos |
+| Lagos | `lakeMaxHeight` | `0.40` | Altura máxima sobre seaLevel para lagos |
+| Lagos | `lakeSmoothing` | `0.08` | Fadeout del borde del lago (elev normalizada) |
+| Humedad | `waterHumidityBonus` | `0.50` | Bonus máximo junto al agua |
+| Humedad | `riverHumidityRadius` | `0.15` | Ancho del aura de humedad fluvial (ridge space) |
+
+### Islas
+
+Las islas emergen automáticamente: son zonas donde el ruido de elevación base supera `seaLevel`. No requieren código extra.
+
+### RiverRidge — domain warping
+
+```
+bx,bz = worldXZ × riverNoiseScale + riverNoiseOffset
+dx    = (Perlin(bx+3.71, bz+8.31) − 0.5) × 3     ← warp en X
+dz    = (Perlin(bx+8.31, bz+3.71) − 0.5) × 3     ← warp en Z
+n     = Perlin(bx+dx, bz+dz)                       ← ruido warped
+ridge = 1 − |n × 2 − 1|                            ← función carpa
+```
+El domain warping desplaza las coordenadas antes de muestrear → canales curvos y orgánicos sin líneas rectas de artefacto. 3 muestras Perlin por vértice.
+
+### LakeMask
+
+```
+scale = riverNoiseScale × 0.35     ← freq muy baja → cuencas grandes
+n     = Perlin(wx×scale + 500, wz×scale + 500)
+if n < lakeThreshold AND seaLevel < normElev < seaLevel+lakeMaxHeight:
+    baseMask = 1 − n/lakeThreshold
+    elevFade = clamp((lakeMax − normElev) / lakeSmoothing)
+    lakeMask = baseMask × elevFade
+```
+Los lagos se aplanan a `seaLevel`, quedando cubiertos por el plano de agua del WaterManager.
+
+### WaterManager sync
+
+`ProceduralTerrain` sincroniza automáticamente `WaterManager.SetWaterLevel(seaLevel × maxHeight)` en `Start()` y `RegenerateAll()`. Arrastrá el WaterManager al campo **Agua** del componente `Procedural Terrain`.
+
+### Notas de performance
+
+- `RiverRidge`: 3 Perlin/vértice (2 warp + 1 ridge)
+- `LakeMask`: 1 Perlin/vértice
+- Total nuevo: 4 Perlin adicionales. En LOD0 (51×51): ~10 400 calls extra/chunk — insignificante.
+- `riverThr`, `bankEdge`, `bankSpan`, `coastBandInv`, `riverRadInv` se pre-computan fuera del loop de vértices.
+
 ## Biomas y clima
 
 El sistema reemplaza el gradiente de altura fijo por una **simulación climática geográfica** por vértice. Temperatura y humedad determinan el bioma; la altitud actúa como modificador.
@@ -89,6 +183,8 @@ color               = mezcla ponderada de biomas por distancia en espacio (elev,
 | `elevationExponent` | `2.5` | Pow aplicado al ruido normalizado [0,1]. Aplana cuencas; preserva montañas. 1=lineal |
 | `ridgeThreshold` | `0.50` | Umbral desde el cual activa la cresta. Con exp=2.5 corresponde al ~20% superior |
 | `ridgeStrength` | `0.75` | Intensidad del efecto cresta. 0=sin efecto, 1=V pura. 0.7–0.8 = cordillera con laderas empinadas |
+| `worldRadius` | `5000` | Radio del continente circular. El terreno cae al fondo del mar más allá de `falloffStartRadius` |
+| `falloffStartRadius` | `4200` | Inicio del degradado. Franja de transición = `worldRadius − falloffStartRadius` = 800 u con defaults |
 
 ### Rangos sugeridos para los 5 biomas
 
@@ -117,7 +213,7 @@ color               = mezcla ponderada de biomas por distancia en espacio (elev,
 
 ### Notas técnicas
 
-- `SampleHeight`: FBM → normalizar [0,1] → `Mathf.Pow(n, elevationExponent)` → si > ridgeThreshold, tent function `1 − |t·2 − 1|` mezclada con `ridgeStrength` → escalar a `maxHeight`
+- `SampleHeight`: FBM → normalizar [0,1] → `Mathf.Pow(n, elevationExponent)` → si > ridgeThreshold, tent function `1 − |t·2 − 1|` mezclada con `ridgeStrength` → escalar a `maxHeight` → **world falloff** (`elev *= 1 − SmoothStep(falloffStartRadius, worldRadius, dist)`). El falloff se aplica dentro de `SampleHeight` → afecta automáticamente a `BuildMesh`, `SampleClimate` y `VegetationSpawner`.
 - `TerrainSettings` (struct) eliminado — `TerrainPreset` (ScriptableObject) lo reemplaza en toda la cadena
 - `VegetationSpawner.Spawn()` ahora recibe `TerrainPreset` directamente
 - `TerrainChunk.SampleHeight()` sigue siendo `public static` para que el spawner acceda
@@ -253,6 +349,24 @@ Los parámetros de noise y clima están en el **TerrainPreset** ScriptableObject
 - Spawn: espera 2 frames → Raycast → snappea al terreno
 - Animaciones procedurales: bob (caminar/correr), squash (aterrizaje), respiración (idle)
 
+### Modo Vuelo
+
+**Activación:** doble toque de Jump (`Space`) en menos de `flyDoubleTapWindow` (default 0.30 s). Mismo gesto lo desactiva.
+
+| Tecla | Acción en vuelo |
+|---|---|
+| WASD | Vuela en la dirección completa de la cámara (incluye pitch) |
+| Space (hold) | Sube verticalmente |
+| C (hold) | Baja verticalmente |
+| Shift | Duplica la velocidad de vuelo |
+
+| Param | Default | Efecto |
+|---|---|---|
+| `flySpeed` | `20` | Velocidad base de vuelo (u/s). Sprint la duplica a 40 u/s. |
+| `flyDoubleTapWindow` | `0.30` | Ventana de tiempo (s) para detectar el doble toque |
+
+El `CharacterController` permanece activo en vuelo → colisiones con paredes y techo funcionan igual. `IsFlying` es un getter público para que `PlayerVisual` pueda leer el estado si lo necesita.
+
 ## Camera
 
 Estilo **Valheim**: cursor libre en reposo; RMB orbita la cámara; scroll hace zoom; SphereCast evita clipping.
@@ -369,6 +483,14 @@ Error de compilación porque `InputSystem_Actions` no existe hasta generar la cl
 El GO padre (`WorldGenerator`) tenía rotación no-cero; los chunks la heredaban.
 **Fix:** `SetPositionAndRotation(worldPos, Quaternion.identity)` en el constructor de `TerrainChunk`.
 
+### Artefacto "Muro de Espinas" (pinches en bordes de ríos)
+`riverM = (ridgeVal − riverThreshold) / riverWidth` es lineal → pendiente C0 en el borde del canal → vértices adyacentes a uno y otro lado del umbral quedan a elevaciones muy distintas → sierra visible.
+**Fix:** Separar la zona de talla (3× el ancho visual, `bankEdge`) de la zona de canal (`riverThr`). Aplicar `Mathf.SmoothStep(0,1,t)` a ambas máscaras → pendiente = 0 en los extremos → transición C2 sin discontinuidades. Carving cambiado de resta con gradiente a `Lerp(normElev, seaLevel, carveM × riverStrength)` — bounded naturalmente.
+
+### Ríos y lagos de altura secos (sin agua visible)
+El WaterManager genera un único plano global en `seaLevel`. Los cauces y cuencas talladas en zonas altas quedaban visibles como valles/cañones secos.
+**Fix:** En el paso de color de `BuildMesh`, cuando `normElev > seaLevel + 0.005`, el canal y el lago reciben un vertex color interpolado hacia `TerrainPreset.riverWaterColor` (azul-teal configurable). Al nivel del mar reciben `riverBedColor` / `oceanFloorColor` como antes (el plano de agua los cubre).
+
 ### noiseScale demasiado alto crea tiling
 Si `noiseScale × chunkSize` da un entero (ej. `0.3 × 50 = 15`), el Perlin noise repite exactamente y todos los chunks se ven iguales.
 **Fix:** Usar `noiseScale` que no produzca múltiplo entero con `chunkSize`. Default recomendado: `0.03`.
@@ -403,6 +525,105 @@ Panel IMGUI togglable con **F3**. Agregar el componente `DebugHUD` a cualquier G
 - Los estilos IMGUI se inicializan lazy la primera vez que `_visible` es true (evita allocs en OnGUI cada frame)
 - `Derived(style, color)` crea un `GUIStyle` inline para colorear FPS y bioma sin definir un estilo extra
 
+## Sistema de Mapa (MapManager.cs)
+
+Panel de mapa global togglable con **M**. Se crea enteramente en código — no necesita prefabs ni Canvases previos.
+
+| Param | Default | Efecto |
+|---|---|---|
+| `player` | — | Transform del jugador (fuente de posición y orientación) |
+| `preset` | — | TerrainPreset (para leer `worldRadius`) |
+| `mapCamera` | auto | Si null, se crea `MapCamera` hijo del GO |
+| `textureSize` | `512` | Resolución de la RenderTexture |
+| `cameraHeight` | `300` | Altura Y de la cámara sobre el mundo |
+| `renderLayers` | `~0` | Capas que renderiza el mapa |
+| `panelSize` | `620` | Diámetro del mapa en puntos de pantalla |
+| `circleSprite` | null | Sprite circular para la máscara (Create → 2D → Sprites → Circle) |
+| `markerSprite` | null | Sprite del marcador del jugador (flecha apuntando al Norte) |
+| `markerColor` | amarillo | Color del marcador |
+| `markerSize` | `18` | Tamaño del marcador en puntos |
+
+### Jerarquía UI generada en Awake
+
+```
+MapCanvas (Screen Space Overlay, sortOrder 20)
+ └── MapRoot
+      ├── MapBg         Image oscura semitransparente (recortada a círculo si hay circleSprite)
+      │    ├── MapBorder Image dorada, aro decorativo
+      │    └── MapMask   Image + Mask → recorta los hijos en círculo
+      │         ├── MapTex        RawImage → RenderTexture de la cámara ortográfica
+      │         └── PlayerMarker  Image, se actualiza cada frame con la posición del jugador
+      └── CloseHint     Text "[ M ] Cerrar mapa"
+```
+
+### Coordenadas del marcador
+
+```
+// Cámara Euler(90,0,0): cameraRight = +X world, cameraUp = +Z world → Norte = arriba
+u = player.x / (worldRadius × 2) + 0.5   → [0..1] en X
+v = player.z / (worldRadius × 2) + 0.5   → [0..1] en Z
+markerAnchoredPos = ((u-0.5) × panelSize, (v-0.5) × panelSize)
+markerRotation.z  = -player.eulerY        → apunta en la dirección del jugador
+```
+
+### Notas de performance
+
+- La cámara del mapa se habilita solo mientras el panel está abierto (`mapCamera.enabled = false` por default).
+- La RenderTexture se mantiene en GPU; el Canvas se activa/desactiva con `SetActive` sin destruirla.
+- Para una minimap always-on, habilitar `mapCamera.enabled = true` permanentemente y mostrar el Canvas sin el toggle.
+
+## World Map Preview (WorldMapPreview.cs)
+
+EditorWindow para previsualizar el mapa mundial completo en 2D **sin entrar en Play mode**.  
+Menú: **Re-Chronos → World Map Preview** · Shortcut: `Ctrl+Shift+M`  
+Archivo: `Assets/_Project/Scripts/Editor/WorldMapPreview.cs`
+
+### Configuración
+
+| Param | Default | Efecto |
+|---|---|---|
+| `Terrain Preset` | — | ScriptableObject con todos los parámetros del mundo |
+| `Ancho / Alto (px)` | `512 × 512` | Resolución de la textura generada |
+| `Escala (u/px)` | `20` | Unidades de mundo por píxel. Con 512×512: cubre ±5 120 u |
+| Botón **Auto** | — | Calcula `pixelScale = worldRadius × 2 / min(w, h)` para que el continente llene el mapa |
+| `Modo` | `BiomeColor` | Ver tabla de modos abajo |
+
+### Modos de visualización
+
+| Modo | Descripción |
+|---|---|
+| `BiomeColor` | Pipeline completo: bioma, ríos, lagos, bancos — idéntico a `BuildMesh` en runtime |
+| `Elevation` | Escala de grises. Fondo oceánico oscuro; tierra blanca en cimas |
+| `Temperature` | Rampa azul (frío) → verde → rojo (cálido) |
+| `Humidity` | Rampa amarillo (seco) → azul (húmedo) |
+| `WaterType` | Bloques sólidos: océano / río / lago / tierra |
+
+### Pipeline de generación
+
+El loop de píxeles replica exactamente `BuildMesh` de `TerrainChunk`:
+
+```
+1. TerrainChunk.SampleHeight(wx, wz, p)   ← public static → FBM + ridge + world falloff
+2. riverRidge → carveM (SmoothStep) → normElev ajustada
+3. LakeMask → normElev ajustada
+4. ComputeTemperature(wx, wz, normElev, p)
+5. ComputeHumidity(wx, wz, p) + waterBonus
+6. SampleBiomeColor(normElev, temp, hum, p) con caída cuadrática y fallback
+7. Lerps finales: riverBedColor / riverWaterColor / oceanFloorColor
+```
+
+Los métodos `RiverRidge`, `LakeMask`, `ComputeTemperature`, `ComputeHumidity` y `SampleBiomeColor` son **private** en `TerrainChunk`. `WorldMapPreview` los replica verbatim — si modificás la lógica en `TerrainChunk`, actualizá también `WorldMapPreview`.
+
+### Performance estimada
+
+| Resolución | Pixels | Calls Perlin ≈ | Tiempo aprox. |
+|---|---|---|---|
+| 512 × 512 | 262 144 | 2.6 M | < 500 ms |
+| 1024 × 1024 | 1 048 576 | 10.5 M | < 2 s |
+
+- Barra de progreso actualizada cada 16 filas (overhead mínimo)
+- Botón **Save PNG** exporta la textura generada mediante `EncodeToPNG()`
+
 ## Próximos pasos
 
 - [x] LOD (Level of Detail) en chunks lejanos — meshStep + showVegetation por distancia Chebyshev
@@ -412,6 +633,9 @@ Panel IMGUI togglable con **F3**. Agregar el componente `DebugHUD` a cualquier G
 - [x] Vegetación procedural (árboles placeholder)
 - [x] Pasto / plantas rasantes (crossed-quad placeholder)
 - [x] Agua (plano con shader)
+- [x] Límites circulares del mundo (world falloff)
+- [x] Mapa global (M key, cámara ortográfica + RenderTexture + UI circular)
+- [x] World Map Preview (EditorWindow 2D, sin Play mode, 5 modos de visualización)
 - [ ] Ciclo día/noche
 - [ ] Sistema de guardado
 - [x] Audio ambiente (día/noche/viento con crossfade)

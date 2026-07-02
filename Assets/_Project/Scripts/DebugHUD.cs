@@ -20,8 +20,8 @@ public class DebugHUD : MonoBehaviour
     private const int W   = 316;   // ancho del panel
     private const int PAD = 10;    // padding interior
     private const int LH  = 20;    // altura de línea
-    // Altura calculada: PAD + header + sep + xyz + chunk + sep + elev + temp + hum + sep + biome + PAD
-    private const int PH  = PAD + LH + 9 + LH + LH + 9 + LH + (LH+2) + (LH+2) + 9 + LH + PAD;
+    // Altura: PAD + header + sep + xyz + chunk + sep + elev + temp + hum + sep + bioma + agua + PAD
+    private const int PH  = PAD + LH + 9 + LH + LH + 9 + LH + (LH+2) + (LH+2) + 9 + LH + LH + PAD;
 
     // ── Estado ────────────────────────────────────────────────────────────────
     private bool    _visible;
@@ -38,7 +38,8 @@ public class DebugHUD : MonoBehaviour
     private float   _normElev;
     private float   _temperature;
     private float   _humidity;
-    private string  _biome = "—";
+    private string    _biome = "—";
+    private WaterType _water = WaterType.None;
 
     // ── IMGUI styles (lazy init, solo en OnGUI) ───────────────────────────────
     private GUIStyle _bgStyle;
@@ -81,6 +82,7 @@ public class DebugHUD : MonoBehaviour
         _temperature = d.Temperature;
         _humidity    = d.Humidity;
         _biome       = d.DominantBiome;
+        _water       = d.Water;
     }
 
     private void OnDestroy()
@@ -145,6 +147,19 @@ public class DebugHUD : MonoBehaviour
         Key(cx, cy, "BIOMA");
         GUI.Label(new Rect(cx + 58, cy, W - PAD * 2 - 58, LH), _biome,
             Derived(_valStyle, new Color(0.95f, 0.84f, 0.48f)));
+        cy += LH;
+
+        // ── Agua ──────────────────────────────────────────────────────────────
+        Key(cx, cy, "AGUA");
+        (string waterLabel, Color waterColor) = _water switch
+        {
+            WaterType.Ocean => ("Océano",  new Color(0.35f, 0.70f, 0.95f)),
+            WaterType.River => ("Río",     new Color(0.40f, 0.78f, 0.90f)),
+            WaterType.Lake  => ("Lago",    new Color(0.35f, 0.65f, 0.88f)),
+            _               => ("—",       new Color(0.50f, 0.58f, 0.68f)),
+        };
+        GUI.Label(new Rect(cx + 58, cy, W - PAD * 2 - 58, LH), waterLabel,
+            Derived(_valStyle, waterColor));
     }
 
     // ── Helpers de layout ─────────────────────────────────────────────────────

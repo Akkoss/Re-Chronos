@@ -13,6 +13,14 @@ public class WaterManager : MonoBehaviour
 
     private GameObject _plane;
 
+    // Sincroniza el nivel del mar con el TerrainPreset (llamado por ProceduralTerrain en Start).
+    public void SetWaterLevel(float y)
+    {
+        waterLevel = y;
+        if (_plane != null)
+            _plane.transform.position = new Vector3(0f, y, 0f);
+    }
+
     private void Start()
     {
         if (viewer == null) viewer = Camera.main?.transform;

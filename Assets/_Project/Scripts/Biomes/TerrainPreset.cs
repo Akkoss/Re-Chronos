@@ -28,6 +28,77 @@ public class TerrainPreset : ScriptableObject
              "0.7–0.8 produce cordilleras con laderas empinadas sin colapsar las cimas.")]
     [Range(0f, 1f)] public float ridgeStrength = 0.75f;
 
+    // ── LÍMITES DEL MUNDO ─────────────────────────────────────────────────────
+    [Header("Límites del Mundo")]
+    [Tooltip("Radio del continente en unidades. El terreno se hunde al océano pasado falloffStartRadius.\n" +
+             "0 = desactiva el efecto (mundo plano e infinito).")]
+    public float worldRadius = 5000f;
+
+    [Tooltip("Radio desde el centro (0,0) donde comienza el degradado suave hacia el borde.\n" +
+             "Debe ser menor que worldRadius. La diferencia (worldRadius − falloffStartRadius) define la anchura de la franja de transición.")]
+    public float falloffStartRadius = 4200f;
+
+    // ── MAR E ISLAS ───────────────────────────────────────────────────────────
+    [Header("Mar e Islas")]
+    [Tooltip("Elevación normalizada [0,1] que separa océano de tierra.\n" +
+             "El WaterManager debe tener waterLevel = seaLevel × maxHeight.\n" +
+             "Con elevationExponent=2.5: 0.15 ≈ 40% océano · 0.08 ≈ 25%.")]
+    [Range(0f, 0.4f)] public float seaLevel = 0.15f;
+
+    [Tooltip("Color del fondo marino (lo cubre el plano de agua, pero es visible en costas someras).")]
+    public Color oceanFloorColor = new(0.16f, 0.20f, 0.25f);
+
+    [Tooltip("Banda de elevación normalizada sobre seaLevel que se considera zona costera.\n" +
+             "Los vértices en esta franja reciben bonus de humedad decreciente.")]
+    [Range(0f, 0.25f)] public float coastalBand = 0.08f;
+
+    // ── RÍOS ──────────────────────────────────────────────────────────────────
+    [Header("Ríos")]
+    [Tooltip("Frecuencia del mapa de ríos. Bajo = canales largos y sinuosos (0.002–0.006).")]
+    public float riverNoiseScale = 0.003f;
+
+    [Tooltip("Seed de desplazamiento para el patrón de ríos. Cambiar para otra red fluvial.")]
+    public Vector2 riverNoiseOffset = new(1000f, 700f);
+
+    [Tooltip("Fracción del rango de la función carpa que define el canal del río.\n" +
+             "0.04 = ríos muy estrechos · 0.15 = cauces anchos.")]
+    [Range(0.02f, 0.20f)] public float riverWidth = 0.07f;
+
+    [Tooltip("Profundidad máxima de la talla fluvial normalizada.\n" +
+             "Los ríos tallan más en montaña (carve ∝ altura) y se suavizan al llegar al mar.")]
+    [Range(0f, 0.8f)] public float riverStrength = 0.55f;
+
+    [Tooltip("Color del lecho del río (grava húmeda / roca oscura).")]
+    public Color riverBedColor = new(0.27f, 0.25f, 0.22f);
+
+    [Tooltip("Color del agua de ríos y lagos sobre el nivel del mar (vertex color).\n" +
+             "El plano del WaterManager solo cubre el seaLevel; este color pinta el agua de altura.")]
+    public Color riverWaterColor = new(0.18f, 0.38f, 0.58f);
+
+    // ── LAGOS ─────────────────────────────────────────────────────────────────
+    [Header("Lagos")]
+    [Tooltip("Umbral del ruido de cuenca [0,1]: valores de ruido por debajo generan lago.\n" +
+             "0 = sin lagos · 0.40 = muchos lagos.")]
+    [Range(0f, 0.5f)] public float lakeThreshold = 0.28f;
+
+    [Tooltip("Elevación máxima sobre seaLevel hasta la que pueden formarse lagos (normalizada).\n" +
+             "seaLevel + lakeMaxHeight define el límite superior de las cuencas lacustres.")]
+    [Range(0.05f, 0.70f)] public float lakeMaxHeight = 0.40f;
+
+    [Tooltip("Rango de fadeout del borde del lago (en elevación normalizada).\n" +
+             "Evita el borde duro entre cuenca y terreno circundante.")]
+    [Range(0.01f, 0.20f)] public float lakeSmoothing = 0.08f;
+
+    // ── AGUA → HUMEDAD ────────────────────────────────────────────────────────
+    [Header("Agua → Humedad")]
+    [Tooltip("Bonus de humedad máximo para vértices sobre agua o en la costa.\n" +
+             "Crea valles fértiles, bosques costeros y elimina desiertos junto al agua.")]
+    [Range(0f, 1f)] public float waterHumidityBonus = 0.50f;
+
+    [Tooltip("Radio del aura de humedad fluvial, en espacio de ridge [0..1].\n" +
+             "0.10 = franja fina junto al cauce · 0.25 = valles fértiles anchos.")]
+    [Range(0f, 0.35f)] public float riverHumidityRadius = 0.15f;
+
     // ── GRADIENTE LATITUDINAL (EJE Z) ────────────────────────────────────────
     [Header("Gradiente latitudinal  (eje Z)")]
     [Tooltip("Temperatura base en Z=0. 0.5 = zona templada (estilo Buenos Aires).")]

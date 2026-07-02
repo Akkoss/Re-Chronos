@@ -48,6 +48,11 @@ public class ProceduralTerrain : MonoBehaviour
     // Chunks más allá de viewDistance+unloadBuffer: destruidos.
     [SerializeField] [Range(0, 6)] private int unloadBuffer = 2;
 
+    [Header("Agua")]
+    // Arrastrá el WaterManager aquí para que su waterLevel se sincronice
+    // automáticamente con preset.seaLevel × preset.maxHeight en cada Start/Regenerate.
+    [SerializeField] private WaterManager waterManager;
+
     private readonly Dictionary<Vector2Int, TerrainChunk> _chunks = new();
     private Vector2Int _lastViewerChunk;
     private bool       _initialized;
@@ -70,6 +75,7 @@ public class ProceduralTerrain : MonoBehaviour
                            "Creá un asset vía Create → Re-Chronos → Terrain Preset.");
             return;
         }
+        SyncWaterLevel();
         UpdateVisibleChunks();
     }
 
@@ -123,6 +129,12 @@ public class ProceduralTerrain : MonoBehaviour
     // REGENERAR TODO
     // ──────────────────────────────────────────────────────────────────────
 
+    private void SyncWaterLevel()
+    {
+        if (waterManager != null && preset != null)
+            waterManager.SetWaterLevel(preset.seaLevel * preset.maxHeight);
+    }
+
     [ContextMenu("Regenerate All Chunks")]
     public void RegenerateAll()
     {
@@ -132,7 +144,7 @@ public class ProceduralTerrain : MonoBehaviour
         PurgeChildren();
         _initialized = false;
         if (viewer == null) viewer = Camera.main?.transform;
-        if (viewer != null && preset != null) UpdateVisibleChunks();
+        if (viewer != null && preset != null) { SyncWaterLevel(); UpdateVisibleChunks(); }
     }
 
     private void PurgeChildren()

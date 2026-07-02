@@ -9,30 +9,31 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float walkSpeed    = 5f;
     [SerializeField] private float sprintSpeed  = 10f;
     [SerializeField] private float jumpHeight   = 2f;
-    // grados/segundo que tarda el personaje en girar hacia la dirección de movimiento
     [SerializeField] private float rotationSpeed = 720f;
 
+    [Header("Fly Mode")]
+    [Tooltip("Velocidad de vuelo base. Sprint la duplica.")]
+    [SerializeField] private float flySpeed = 20f;
+    [Tooltip("Ventana de tiempo (s) para detectar el doble toque de Jump que activa el vuelo.")]
+    [SerializeField] private float flyDoubleTapWindow = 0.30f;
+
     [Header("References")]
-    // Arrastrá la Main Camera aquí. Si está vacío se busca automáticamente.
     [SerializeField] private Transform cameraTransform;
 
     private CharacterController _cc;
     private InputSystem_Actions _input;
 
-    // Velocidad vertical acumulada (gravedad + impulso de salto).
     private float _verticalVelocity;
-
-    // Física: aceleración de gravedad (negativa = hacia abajo).
     private const float Gravity = -20f;
 
-    // El jugador no acepta input ni aplica física hasta que el terreno esté listo.
-    private bool _ready;
+    private bool  _ready;
+    private bool  _flying;
+    private float _lastJumpTime = -1f;
 
-    // Estado público para que PlayerVisual pueda leer la situación del jugador
-    // sin acoplarse a los detalles internos del controlador.
     public bool IsGrounded  => _cc.isGrounded;
     public bool IsMoving    => _ready && _input.Player.Move.ReadValue<Vector2>() != Vector2.zero;
     public bool IsSprinting => _ready && _input.Player.Sprint.IsPressed();
+    public bool IsFlying    => _flying;
 
     private void Awake()
     {
@@ -98,8 +99,25 @@ public class PlayerController : MonoBehaviour
     private void Update()
     {
         if (!_ready) return;
-        Move();
-        ApplyGravityAndJump();
+
+        // Doble toque de Jump (dentro de flyDoubleTapWindow) → toggle vuelo.
+        if (_input.Player.Jump.triggered)
+        {
+            if (Time.time - _lastJumpTime <= flyDoubleTapWindow)
+            {
+                _flying = !_flying;
+                _verticalVelocity = 0f; // sin inercia al cambiar de modo
+            }
+            _lastJumpTime = Time.time;
+        }
+
+        if (_flying)
+            MoveFlying();
+        else
+        {
+            Move();
+            ApplyGravityAndJump();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -128,6 +146,39 @@ public class PlayerController : MonoBehaviour
         Quaternion targetRot = Quaternion.LookRotation(moveDir);
         transform.rotation = Quaternion.RotateTowards(
             transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+    }
+
+    // ------------------------------------------------------------------
+    // MODO VUELO
+    // ------------------------------------------------------------------
+    // WASD vuela en la dirección a la que apunta la cámara (incluyendo pitch),
+    // Jump sube verticalmente, Crouch baja. Sprint duplica la velocidad.
+    // El CharacterController sigue activo para detectar colisiones.
+    // ------------------------------------------------------------------
+    private void MoveFlying()
+    {
+        Vector2 moveInput = _input.Player.Move.ReadValue<Vector2>();
+        float   speed     = _input.Player.Sprint.IsPressed() ? flySpeed * 2f : flySpeed;
+
+        // Dirección 3D completa siguiendo la cámara (no proyectada en el plano XZ).
+        Vector3 dir = cameraTransform.forward * moveInput.y
+                    + cameraTransform.right   * moveInput.x;
+
+        // Ascenso / descenso absolutos con Jump y Crouch.
+        if (_input.Player.Jump.IsPressed())   dir += Vector3.up;
+        if (_input.Player.Crouch.IsPressed()) dir -= Vector3.up;
+
+        if (dir != Vector3.zero)
+            _cc.Move(dir.normalized * (speed * Time.deltaTime));
+
+        // Rotar el cuerpo hacia la componente horizontal del movimiento.
+        Vector3 flat = Vector3.ProjectOnPlane(dir, Vector3.up);
+        if (flat.sqrMagnitude > 0.01f)
+        {
+            Quaternion targetRot = Quaternion.LookRotation(flat);
+            transform.rotation = Quaternion.RotateTowards(
+                transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+        }
     }
 
     // ------------------------------------------------------------------
